@@ -10,6 +10,12 @@ isn't obvious from the doctype schema alone.
 import frappe
 
 
+# ERPNext v16 builds a Serial and Batch Bundle for any row that carries a
+# batch_no, which then collides with the batch_no still set on the row
+# ("Serial and Batch Bundle ... has already created"). Outward rows fail
+# outright. use_serial_batch_fields keeps the plain batch_no path instead.
+
+
 def on_processing_stage_log_created(doc, method):
     """When a Processing Stage Log reaches the final 'Dried' stage, create the
     Raw Material lot (a native Batch) and the Stock Entry that receives it into
@@ -57,6 +63,7 @@ def on_processing_stage_log_created(doc, method):
                 "uom": doc.uom or "Kg",
                 "t_warehouse": "Raw Materials - S",
                 "batch_no": batch.name,
+                "use_serial_batch_fields": 1,
                 "allow_zero_valuation_rate": 1,
             }],
         })
@@ -94,6 +101,7 @@ def on_extraction_batch_before_save(doc, method):
             "uom": row.uom or "Kg",
             "s_warehouse": "Raw Materials - S",
             "batch_no": row.batch,
+            "use_serial_batch_fields": 1,
             "allow_zero_valuation_rate": 1,
         })
     issue_entry = frappe.get_doc({
@@ -125,6 +133,7 @@ def on_extraction_batch_before_save(doc, method):
             "uom": doc.output_uom or "Kg",
             "t_warehouse": "Extract Storage - S",
             "batch_no": extract_batch.name,
+            "use_serial_batch_fields": 1,
             "allow_zero_valuation_rate": 1,
         }],
     })
