@@ -7,6 +7,8 @@ lot of implicit validation (valuation rate, serial/batch bundle settings, etc.) 
 isn't obvious from the doctype schema alone.
 """
 
+from contextlib import contextmanager
+
 import frappe
 
 
@@ -14,6 +16,25 @@ import frappe
 # batch_no, which then collides with the batch_no still set on the row
 # ("Serial and Batch Bundle ... has already created"). Outward rows fail
 # outright. use_serial_batch_fields keeps the plain batch_no path instead.
+
+
+@contextmanager
+def system_permissions():
+    """Run a block with permission checks off, as the system rather than the user.
+
+    Submitting a Stock Entry makes ERPNext materialise a Serial and Batch Bundle,
+    and that insert permission-checks the *session* user -- passing
+    ignore_permissions to the Stock Entry doesn't reach it. Without this, every
+    operator would need rights on a stock-internals doctype they never touch
+    directly ("does not have doctype access via role permission for document
+    Serial and Batch Bundle").
+    """
+    previous = frappe.flags.ignore_permissions
+    frappe.flags.ignore_permissions = True
+    try:
+        yield
+    finally:
+        frappe.flags.ignore_permissions = previous
 
 
 def on_processing_stage_log_created(doc, method):
@@ -67,8 +88,9 @@ def on_processing_stage_log_created(doc, method):
                 "allow_zero_valuation_rate": 1,
             }],
         })
-        stock_entry.insert(ignore_permissions=True)
-        stock_entry.submit()
+        with system_permissions():
+            stock_entry.insert(ignore_permissions=True)
+            stock_entry.submit()
 
     harvest_batch.raw_material_batch = batch.name
     harvest_batch.status = "Quarantine"
@@ -110,8 +132,9 @@ def on_extraction_batch_before_save(doc, method):
         "company": "Symbiotope",
         "items": issue_items,
     })
-    issue_entry.insert(ignore_permissions=True)
-    issue_entry.submit()
+    with system_permissions():
+        issue_entry.insert(ignore_permissions=True)
+        issue_entry.submit()
 
     extract_batch_id = f"{doc.name}-EXT"
     extract_batch = frappe.get_doc({
@@ -137,8 +160,9 @@ def on_extraction_batch_before_save(doc, method):
             "allow_zero_valuation_rate": 1,
         }],
     })
-    receipt_entry.insert(ignore_permissions=True)
-    receipt_entry.submit()
+    with system_permissions():
+        receipt_entry.insert(ignore_permissions=True)
+        receipt_entry.submit()
 
     doc.output_extract_batch = extract_batch.name
     total_input = sum(row.qty_used for row in doc.input_batches)
