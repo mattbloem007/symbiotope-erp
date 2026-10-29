@@ -20,21 +20,32 @@ import frappe
 
 @contextmanager
 def system_permissions():
-    """Run a block with permission checks off, as the system rather than the user.
+    """Run a block as Administrator rather than as the session user.
 
     Submitting a Stock Entry makes ERPNext materialise a Serial and Batch Bundle,
     and that insert permission-checks the *session* user -- passing
-    ignore_permissions to the Stock Entry doesn't reach it. Without this, every
-    operator would need rights on a stock-internals doctype they never touch
-    directly ("does not have doctype access via role permission for document
-    Serial and Batch Bundle").
+    ignore_permissions to the Stock Entry doesn't reach it. Neither does setting
+    frappe.flags.ignore_permissions: frappe.permissions.has_permission never
+    consults that flag, and Document.has_permission only honours the per-document
+    flags.ignore_permissions, which we can't reach on a doc ERPNext builds
+    internally. Administrator is the one user has_permission short-circuits on.
+
+    Without this, every operator would need rights on a stock-internals doctype
+    they never touch directly ("does not have doctype access via role permission
+    for document Serial and Batch Bundle").
+
+    Only frappe.session.user is swapped, deliberately -- frappe.set_user() would
+    also reset frappe.local.form_dict and the language out from under the request
+    that is still in flight. Documents created inside the block are owned by
+    Administrator; the Harvest or Extraction Batch that triggered them keeps the
+    real operator, which is where the traceability record lives.
     """
-    previous = frappe.flags.ignore_permissions
-    frappe.flags.ignore_permissions = True
+    previous_user = frappe.session.user
+    frappe.session.user = "Administrator"
     try:
         yield
     finally:
-        frappe.flags.ignore_permissions = previous
+        frappe.session.user = previous_user
 
 
 def on_processing_stage_log_created(doc, method):
