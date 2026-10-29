@@ -88,6 +88,25 @@ def get_stock_overview():
     return {"warehouses": warehouses, "rows": rows}
 
 
+def _safe_get_all(doctype, **kwargs):
+    """A lookup whose failure must not take the whole screen down.
+
+    The lot resolution below reaches into ERPNext's own internals, and those
+    move between versions. If one of those reads fails, the movements list
+    should still render with the lots it could resolve rather than 500 -- but
+    the failure is logged rather than swallowed, because a column of dashes
+    with nothing in the log is how a defect goes unnoticed.
+    """
+    try:
+        return frappe.get_all(doctype, **kwargs)
+    except Exception:
+        frappe.log_error(
+            title="Symbiotope Console: lot lookup failed",
+            message=f"{doctype}: {frappe.get_traceback()}",
+        )
+        return []
+
+
 @frappe.whitelist()
 def get_stock_movements(limit=100):
     """Recent stock movements, each carrying the lot that moved.
@@ -146,11 +165,12 @@ def get_stock_movements(limit=100):
     ]
     bundle_lots = {}
     if bundle_ids:
-        for entry in frappe.get_all(
+        # No parent kwarg: frappe.get_all does not take one, and it reads child
+        # tables directly because it does not run permission checks at all.
+        for entry in _safe_get_all(
             "Serial and Batch Entry",
             filters={"parent": ["in", bundle_ids]},
             fields=["parent", "batch_no"],
-            parent="Serial and Batch Bundle",
         ):
             if entry.get("batch_no"):
                 bundle_lots.setdefault(entry["parent"], entry["batch_no"])
@@ -165,11 +185,10 @@ def get_stock_movements(limit=100):
     ]
     detail_lots = {}
     if detail_ids:
-        for detail in frappe.get_all(
+        for detail in _safe_get_all(
             "Stock Entry Detail",
             filters={"name": ["in", detail_ids]},
             fields=["name", "batch_no"],
-            parent="Stock Entry",
         ):
             if detail.get("batch_no"):
                 detail_lots[detail["name"]] = detail["batch_no"]
