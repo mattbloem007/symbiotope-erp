@@ -90,11 +90,22 @@ def get_stock_overview():
 
 @frappe.whitelist()
 def get_stock_movements(limit=100):
-    """Recent stock movements, each carrying the batch that moved.
+    """Recent stock movements, each carrying the lot that moved.
 
-    batch_no is the whole point: it is what ties a quantity in a warehouse back
+    The lot is the whole point: it is what ties a quantity in a warehouse back
     to the harvest or extraction that produced it, which is the question this
     system exists to answer.
+
+    Getting it is not as simple as reading Stock Ledger Entry.batch_no. In
+    ERPNext v16 that column stays empty -- measured, not assumed: all 19
+    movements on this site had it null -- because the lot is recorded on the
+    Serial and Batch Bundle the submit materialises instead. That is the same
+    v16 behaviour that caused the permission failure in the extraction hook.
+
+    So the lot is resolved in three passes, cheapest first: the column itself
+    where some other code path did populate it, then the bundle, then the Stock
+    Entry row the ledger entry came from. A movement with no lot at all is an
+    untracked item, which is a real answer rather than a lookup failure.
     """
     _require_console_role()
 
@@ -105,7 +116,7 @@ def get_stock_movements(limit=100):
     except (TypeError, ValueError):
         limit = 100
 
-    return frappe.get_all(
+    rows = frappe.get_all(
         "Stock Ledger Entry",
         fields=[
             "item_code",
@@ -115,11 +126,64 @@ def get_stock_movements(limit=100):
             "posting_date",
             "voucher_type",
             "voucher_no",
+            "serial_and_batch_bundle",
+            "voucher_detail_no",
         ],
         filters={"is_cancelled": 0},
         order_by="posting_date desc, creation desc",
         limit=limit,
     )
+
+    unresolved = [row for row in rows if not row.get("batch_no")]
+
+    # Pass 2: the Serial and Batch Bundle. One bundle can hold several lots;
+    # the Console shows one per movement, so a split bundle is reported as its
+    # first lot rather than silently as none.
+    bundle_ids = [
+        row["serial_and_batch_bundle"]
+        for row in unresolved
+        if row.get("serial_and_batch_bundle")
+    ]
+    bundle_lots = {}
+    if bundle_ids:
+        for entry in frappe.get_all(
+            "Serial and Batch Entry",
+            filters={"parent": ["in", bundle_ids]},
+            fields=["parent", "batch_no"],
+            parent="Serial and Batch Bundle",
+        ):
+            if entry.get("batch_no"):
+                bundle_lots.setdefault(entry["parent"], entry["batch_no"])
+
+    # Pass 3: the Stock Entry row itself, which carries batch_no directly when
+    # the automation set use_serial_batch_fields.
+    detail_ids = [
+        row["voucher_detail_no"]
+        for row in unresolved
+        if row.get("voucher_detail_no")
+        and not bundle_lots.get(row.get("serial_and_batch_bundle"))
+    ]
+    detail_lots = {}
+    if detail_ids:
+        for detail in frappe.get_all(
+            "Stock Entry Detail",
+            filters={"name": ["in", detail_ids]},
+            fields=["name", "batch_no"],
+            parent="Stock Entry",
+        ):
+            if detail.get("batch_no"):
+                detail_lots[detail["name"]] = detail["batch_no"]
+
+    for row in rows:
+        if not row.get("batch_no"):
+            row["batch_no"] = bundle_lots.get(
+                row.get("serial_and_batch_bundle")
+            ) or detail_lots.get(row.get("voucher_detail_no"))
+        # Plumbing, not something the Console renders.
+        row.pop("serial_and_batch_bundle", None)
+        row.pop("voucher_detail_no", None)
+
+    return rows
 
 
 @frappe.whitelist()
