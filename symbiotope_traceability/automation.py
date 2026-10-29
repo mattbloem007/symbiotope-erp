@@ -108,12 +108,36 @@ def on_processing_stage_log_created(doc, method):
     harvest_batch.save(ignore_permissions=True)
 
 
+def _snapshot_sop_version(doc):
+    """Freeze the SOP's version onto the run as soon as an SOP is attached.
+
+    The point of the snapshot is that it does NOT follow the SOP. When the SOP
+    is revised to v3, every run already carrying v2 keeps saying v2, because
+    that is the procedure the operator actually worked to. A live Link to the
+    SOP alone would silently rewrite history on every revision.
+
+    Written only when empty, so re-saving a run never moves it. Clearing the
+    SOP clears the snapshot with it, otherwise a stale version would be left
+    attached to a run that no longer claims any procedure.
+    """
+    if not doc.sop:
+        doc.sop_version_snapshot = None
+        return
+
+    if not doc.sop_version_snapshot:
+        doc.sop_version_snapshot = frappe.db.get_value("SOP", doc.sop, "version")
+
+
 def on_extraction_batch_before_save(doc, method):
     """When an Extraction Batch's status changes to Complete: block any input
     Batch that isn't Released (quarantine gating), consume the inputs from Raw
     Materials, and create the output Extract lot + the Stock Entry that receives
     it into Extract Storage -- all the automatic ERP-inventory steps from the
-    client's spec, not manual entry."""
+    client's spec, not manual entry.
+
+    Also freezes the SOP version onto the run the moment an SOP is attached."""
+    _snapshot_sop_version(doc)
+
     if doc.status != "Complete" or not doc.has_value_changed("status"):
         return
 
