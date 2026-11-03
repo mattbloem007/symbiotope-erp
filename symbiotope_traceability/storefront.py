@@ -572,9 +572,37 @@ def receive_finished_goods(item_code, warehouse, qty, basic_rate):
 
 @frappe.whitelist(methods=["POST"])
 def tag_warehouse_for_brand(warehouse, brand_tag):
-    """Set which brand a warehouse sells for. Only a System Manager may do this."""
-    if "System Manager" not in frappe.get_roles():
-        frappe.throw(_("Only a System Manager can change which brand a warehouse sells for."),
-                     frappe.PermissionError)
+    """Set which brand a warehouse sells for."""
+    _require_admin()
     frappe.db.set_value("Warehouse", warehouse, "brand_tag", brand_tag or None)
     return {"warehouse": warehouse, "brand_tag": brand_tag or None}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_brand_warehouse(warehouse_name, brand_tag):
+    """Create a warehouse that sells for one brand, under the company's warehouse tree."""
+    _require_admin()
+    warehouse_name = (warehouse_name or "").strip()
+    brand_tag = (brand_tag or "").strip()
+    if not warehouse_name or not brand_tag:
+        frappe.throw(_("A warehouse name and a brand tag are both needed."))
+
+    company = frappe.defaults.get_global_default("company")
+    abbr = frappe.db.get_value("Company", company, "abbr")
+    if frappe.db.exists("Warehouse", f"{warehouse_name} - {abbr}"):
+        frappe.throw(_("A warehouse called {0} already exists.").format(warehouse_name))
+    parent = frappe.db.get_value("Warehouse", {"company": company, "is_group": 1}, "name", order_by="lft asc")
+    if not parent:
+        frappe.throw(_("The company has no group warehouse to put this warehouse under."))
+
+    with system_permissions():
+        warehouse = frappe.get_doc({
+            "doctype": "Warehouse",
+            "warehouse_name": warehouse_name,
+            "company": company,
+            "parent_warehouse": parent,
+            "is_group": 0,
+            "brand_tag": brand_tag,
+        })
+        warehouse.insert(ignore_permissions=True)
+    return {"warehouse": warehouse.name, "brand_tag": brand_tag}
