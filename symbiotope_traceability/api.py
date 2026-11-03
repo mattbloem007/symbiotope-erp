@@ -33,6 +33,10 @@ CONSOLE_ROLES = frozenset({
     "QA",
     "Symbiotope Admin",
     "System Manager",
+    # Order managers read stock to ship from; they do not write it.
+    "Sales Manager",
+    "Stock Manager",
+    "Delivery Manager",
 })
 
 
@@ -80,7 +84,7 @@ def get_stock_overview():
 
     warehouses = frappe.get_all(
         "Warehouse",
-        fields=["name", "warehouse_name"],
+        fields=["name", "warehouse_name", "brand_tag"],
         filters={"is_group": 0, "disabled": 0},
         order_by="name asc",
     )
