@@ -21,7 +21,9 @@ shown to staff rather than rejected after the customer has paid.
 Config (site_config.json, set in Frappe Cloud):
 - storefront_erp_secret: the storefronts send this as X-Symbiotope-Secret.
 - storefront_notify_secret: this app sends it to the storefronts when an order ships.
-- storefront_base_url: where the storefronts live, e.g. https://symbiotope.example.
+- storefront_base_urls: where each brand's storefront lives, keyed by brand tag,
+  e.g. {"symbiotope-owned-test": "https://symbiotope.netlify.app"}. Shipping notices
+  go to the storefront that sold the order.
 """
 
 import hmac
@@ -174,14 +176,15 @@ def _get_or_create_customer(email, full_name):
 
 
 def _notify_storefront_shipped(sales_order_name, delivery_note_name):
-    """Ask the storefront to send the shipping email. Returns True on success.
+    """Ask the storefront that sold the order to send the shipping email.
 
-    The storefront reads the order back from here by its status token, so only
-    the token and the delivery note go over the wire.
+    Returns True on success. The storefront reads the order back from here by its
+    status token, so only the token and the delivery note go over the wire.
     """
-    base_url = frappe.conf.get("storefront_base_url")
+    brand_tag, token = frappe.db.get_value(
+        "Sales Order", sales_order_name, ["brand_tag", "status_token"])
+    base_url = (frappe.conf.get("storefront_base_urls") or {}).get(brand_tag)
     secret = frappe.conf.get("storefront_notify_secret")
-    token = frappe.db.get_value("Sales Order", sales_order_name, "status_token")
     if not (base_url and secret and token):
         frappe.log_error(
             title="Storefront shipping notice not sent: not configured",
