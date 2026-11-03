@@ -51,45 +51,54 @@ SHIPMENT_STATUSES = ("Unfulfilled", "Partially Shipped", "Shipped", "Cancelled")
 
 
 def setup_custom_fields():
-    create_custom_fields(
-        {
-            "Sales Order": [
-                {"fieldname": "storefront_section", "fieldtype": "Section Break",
-                 "label": "Storefront", "insert_after": "customer_name", "collapsible": 1},
-                {"fieldname": "brand_tag", "fieldtype": "Data", "label": "Brand Tag",
-                 "insert_after": "storefront_section", "read_only": 1, "search_index": 1},
-                {"fieldname": "stripe_session_id", "fieldtype": "Data", "label": "Stripe Checkout Session",
-                 "insert_after": "brand_tag", "read_only": 1, "search_index": 1},
-                {"fieldname": "stripe_payment_intent", "fieldtype": "Data", "label": "Stripe Payment Intent",
-                 "insert_after": "stripe_session_id", "read_only": 1, "search_index": 1},
-                {"fieldname": "customer_email", "fieldtype": "Data", "label": "Customer Email",
-                 "insert_after": "stripe_payment_intent", "read_only": 1},
-                {"fieldname": "language", "fieldtype": "Data", "label": "Language",
-                 "insert_after": "customer_email", "read_only": 1},
-                {"fieldname": "status_token", "fieldtype": "Data", "label": "Order Status Token",
-                 "insert_after": "language", "read_only": 1, "search_index": 1},
-                {"fieldname": "stock_shortfall", "fieldtype": "Check", "label": "Stock Shortfall (review)",
-                 "insert_after": "status_token", "read_only": 1},
-                {"fieldname": "shipping_status", "fieldtype": "Select", "label": "Shipping Status",
-                 "options": "\n".join(SHIPMENT_STATUSES), "default": "Unfulfilled",
-                 "insert_after": "stock_shortfall", "read_only": 1},
-                {"fieldname": "shipping_notice_sent", "fieldtype": "Check", "label": "Shipping Notice Sent",
-                 "insert_after": "shipping_status", "read_only": 1},
-            ],
-            "Warehouse": [
-                {"fieldname": "brand_tag", "fieldtype": "Data", "label": "Brand Tag",
-                 "insert_after": "warehouse_name", "search_index": 1,
-                 "description": "The storefront brand this warehouse ships for."},
-            ],
-            "Delivery Note": [
-                {"fieldname": "carrier", "fieldtype": "Data", "label": "Carrier",
-                 "insert_after": "customer_name"},
-                {"fieldname": "tracking_number", "fieldtype": "Data", "label": "Tracking Number",
-                 "insert_after": "carrier"},
-            ],
-        },
-        update=True,
-    )
+    fields = {
+        "Sales Order": [
+            {"fieldname": "storefront_section", "fieldtype": "Section Break",
+             "label": "Storefront", "insert_after": "customer_name", "collapsible": 1},
+            {"fieldname": "brand_tag", "fieldtype": "Data", "label": "Brand Tag",
+             "insert_after": "storefront_section", "read_only": 1, "search_index": 1},
+            {"fieldname": "stripe_session_id", "fieldtype": "Data", "label": "Stripe Checkout Session",
+             "insert_after": "brand_tag", "read_only": 1, "search_index": 1},
+            {"fieldname": "stripe_payment_intent", "fieldtype": "Data", "label": "Stripe Payment Intent",
+             "insert_after": "stripe_session_id", "read_only": 1, "search_index": 1},
+            {"fieldname": "customer_email", "fieldtype": "Data", "label": "Customer Email",
+             "insert_after": "stripe_payment_intent", "read_only": 1},
+            {"fieldname": "language", "fieldtype": "Data", "label": "Language",
+             "insert_after": "customer_email", "read_only": 1},
+            {"fieldname": "status_token", "fieldtype": "Data", "label": "Order Status Token",
+             "insert_after": "language", "read_only": 1, "search_index": 1},
+            {"fieldname": "stock_shortfall", "fieldtype": "Check", "label": "Stock Shortfall (review)",
+             "insert_after": "status_token", "read_only": 1},
+            {"fieldname": "shipping_status", "fieldtype": "Select", "label": "Shipping Status",
+             "options": "\n".join(SHIPMENT_STATUSES), "default": "Unfulfilled",
+             "insert_after": "stock_shortfall", "read_only": 1},
+            {"fieldname": "shipping_notice_sent", "fieldtype": "Check", "label": "Shipping Notice Sent",
+             "insert_after": "shipping_status", "read_only": 1},
+        ],
+        "Warehouse": [
+            {"fieldname": "brand_tag", "fieldtype": "Data", "label": "Brand Tag",
+             "insert_after": "warehouse_name", "search_index": 1,
+             "description": "The storefront brand this warehouse ships for."},
+        ],
+        "Delivery Note": [
+            {"fieldname": "carrier", "fieldtype": "Data", "label": "Carrier",
+             "insert_after": "customer_name"},
+            {"fieldname": "tracking_number", "fieldtype": "Data", "label": "Tracking Number",
+             "insert_after": "carrier"},
+        ],
+    }
+    for doctype, specs in fields.items():
+        # A field ERPNext already ships (such as Sales Order's `language`) can't be
+        # re-added as a custom field, so use the standard one as it is.
+        wanted = [df for df in specs if not _is_standard_field(doctype, df["fieldname"])]
+        if wanted:
+            create_custom_fields({doctype: wanted}, update=True)
+
+
+def _is_standard_field(doctype, fieldname):
+    if frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": fieldname}):
+        return False
+    return frappe.get_meta(doctype).has_field(fieldname)
 
 
 # ---------------------------------------------------------------------------
