@@ -600,13 +600,21 @@ def send_purchase_order_to_supplier(name, recipient=None, message=None):
     reply_to = _reply_to(order.company)
 
     try:
-        from frappe.utils.pdf import get_pdf
-
+        # `as_pdf=True` rather than rendering the HTML and passing it to
+        # `get_pdf` ourselves: only this path hands Chromium the print format,
+        # which is what applies the page CSS that lays the rows out on A4.
+        # Rendering the bare HTML instead collapsed the format's label columns,
+        # so every field wrapped onto its own line and the table spilled to
+        # within 7mm of the paper edge.
         with system_permissions():
-            html = frappe.get_print(
-                "Purchase Order", order.name, _purchase_order_print_format(), doc=order
+            pdf = frappe.get_print(
+                "Purchase Order",
+                order.name,
+                _purchase_order_print_format(),
+                doc=order,
+                as_pdf=True,
             )
-        attachment = {"fname": f"{order.name}.pdf", "fcontent": get_pdf(html)}
+        attachment = {"fname": f"{order.name}.pdf", "fcontent": pdf}
         frappe.sendmail(
             recipients=addresses,
             subject=subject,
