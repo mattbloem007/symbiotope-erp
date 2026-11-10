@@ -11,6 +11,7 @@ after_migrate = [
     "symbiotope_traceability.storefront.setup_custom_fields",
     "symbiotope_traceability.purchasing.setup_purchasing_fields",
     "symbiotope_traceability.purchasing.setup_purchasing_permissions",
+    "symbiotope_traceability.purchasing.setup_purchase_order_print_format",
 ]
 
 # Automation for Milestone 4's harvest -> processing -> extraction -> inventory loop.

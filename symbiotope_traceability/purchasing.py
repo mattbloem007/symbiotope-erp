@@ -82,6 +82,12 @@ RAW_MATERIALS_WAREHOUSE_HINT = (
     '"Raw Materials - {abbr}") before recording a delivery.'
 )
 
+#: Print format the supplier sees. ERPNext ships this one with the site, and it
+#: is the only standard Purchase Order layout whose item table fits A4 without
+#: wrapping every item code over three lines -- which is what a supplier
+#: receiving the order in an email actually reads.
+PURCHASE_ORDER_PRINT_FORMAT = "Purchase Order Bordered"
+
 
 # ---------------------------------------------------------------------------
 # Setup (runs after every migrate, so the fields and read access always exist)
@@ -232,6 +238,44 @@ def _is_standard_field(doctype, fieldname):
     if frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": fieldname}):
         return False
     return frappe.get_meta(doctype).has_field(fieldname)
+
+
+def setup_purchase_order_print_format():
+    """Make Purchase Order print as a supplier-facing document.
+
+    Out of the box no print format is marked as the default for Purchase Order,
+    so Frappe falls back to the generic layout it builds from the doctype. That
+    layout gives the whole document a narrow text column: item codes wrap over
+    three lines, and its own title block prints past the letterhead's right edge
+    and close to the paper edge, which reads as a page that has been cut off.
+
+    Seeded only when nothing is set, so a format chosen later in Desk is not
+    overwritten by the next migrate.
+    """
+    if not frappe.db.exists(
+        "Print Format", {"name": PURCHASE_ORDER_PRINT_FORMAT, "disabled": 0}
+    ):
+        return
+
+    current = frappe.db.get_value("DocType", "Purchase Order", "default_print_format")
+    if not current:
+        frappe.db.set_value(
+            "DocType", "Purchase Order", "default_print_format", PURCHASE_ORDER_PRINT_FORMAT
+        )
+        # The default is read off the doctype meta, which is cached per process.
+        frappe.clear_cache(doctype="Purchase Order")
+
+
+def _purchase_order_print_format():
+    """The format to render, or None to let Frappe fall back.
+
+    Passed explicitly rather than left to the site default: the emailed PDF is
+    the supplier's first impression of the order, so it should not change shape
+    because somebody picked another format in Desk for their own printing.
+    """
+    if frappe.db.exists("Print Format", {"name": PURCHASE_ORDER_PRINT_FORMAT, "disabled": 0}):
+        return PURCHASE_ORDER_PRINT_FORMAT
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +603,9 @@ def send_purchase_order_to_supplier(name, recipient=None, message=None):
         from frappe.utils.pdf import get_pdf
 
         with system_permissions():
-            html = frappe.get_print("Purchase Order", order.name, doc=order)
+            html = frappe.get_print(
+                "Purchase Order", order.name, _purchase_order_print_format(), doc=order
+            )
         attachment = {"fname": f"{order.name}.pdf", "fcontent": get_pdf(html)}
         frappe.sendmail(
             recipients=addresses,
