@@ -496,9 +496,11 @@ def get_purchase_order(name):
         frappe.get_cached_value("Company", order["company"], "company_name")
         or order["company"]
     )
-    # What the Console should pre-fill in "Send to supplier": the contact on the
-    # order first, then the supplier's own primary contact.
-    order["recipient"] = order.get("contact_email") or _supplier_email(order["supplier"]) or ""
+    # What the Console should pre-fill in "Send to supplier": the address the
+    # admin recorded for the supplier, then whatever was used on this order.
+    order["recipient"] = (
+        _supplier_email(order["supplier"]) or order.get("contact_email") or ""
+    )
     order["reply_to"] = _reply_to(order["company"]) or ""
 
     received = _received_by_order_item(name)
@@ -551,6 +553,37 @@ def get_purchase_order(name):
     return order
 
 
+# ---------------------------------------------------------------------------
+# Console API: where an order goes
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist(methods=["POST"])
+def set_supplier_email(supplier, email=None):
+    """Set the address this supplier's Purchase Orders are sent to.
+
+    Kept on `Supplier.email_id` rather than in a Contact, so the address is
+    visible in the ERP too and a supplier entered in Desk carries it without
+    needing a linked Contact. It is what `_supplier_email` reads first, which
+    means setting it here also pre-fills "Send to supplier" on every future
+    order, and on orders already raised.
+
+    Admin-only on purpose: Stock Manager raises and receives material, but
+    deciding where an order actually goes is a commercial decision. An empty
+    value clears it, so the operator types an address again.
+    """
+    _require_admin()
+    _validate_supplier(supplier)
+
+    address = (email or "").strip()
+    if address:
+        validate_email_address(address, throw=True)
+
+    frappe.db.set_value("Supplier", supplier, "email_id", address)
+
+    return {"supplier": supplier, "email": address}
+
+
 @frappe.whitelist(methods=["POST"])
 def send_purchase_order_to_supplier(name, recipient=None, message=None):
     """Email a submitted Purchase Order to its supplier, with the PDF attached.
@@ -558,8 +591,9 @@ def send_purchase_order_to_supplier(name, recipient=None, message=None):
     Sending is deliberately an explicit action rather than a side effect of
     submit: a PO is recorded the moment it is raised, but whether and when it
     reaches the supplier is a human decision, and the buyer may need to correct
-    it first. The address defaults to the contact on the order, then to the
-    supplier's primary Contact, and can always be overridden from the Console.
+    it first. The address defaults to the one an admin recorded for the
+    supplier, then to whatever was used on this order, then to the supplier's
+    primary Contact, and can always be overridden from the Console.
 
     The PDF is generated as Administrator because the role that buys material
     has no print permission on the ERPNext document, then the mail itself is
@@ -579,13 +613,13 @@ def send_purchase_order_to_supplier(name, recipient=None, message=None):
         if address.strip()
     ]
     if not addresses:
-        fallback = order.get("contact_email") or _supplier_email(order.supplier)
+        fallback = _supplier_email(order.supplier) or order.get("contact_email")
         addresses = [fallback] if fallback else []
     if not addresses:
         frappe.throw(
             _(
-                "No email address is recorded for supplier {0}. Add a contact with "
-                "an email to the supplier, or type an address to send to."
+                "No email address is recorded for supplier {0}. An admin can add "
+                "one on the Suppliers screen, or you can type an address to send to."
             ).format(order.supplier)
         )
     for address in addresses:
@@ -934,6 +968,14 @@ def _require_procurement():
         )
 
 
+def _require_admin():
+    if not ADMIN_ROLES.intersection(frappe.get_roles()):
+        frappe.throw(
+            _("Not permitted: only an admin can change a supplier's order address."),
+            frappe.PermissionError,
+        )
+
+
 def _company():
     company = frappe.defaults.get_global_default("company")
     if not company:
@@ -993,12 +1035,19 @@ def _validate_supplier(supplier):
 
 
 def _supplier_email(supplier):
-    """The supplier's primary Contact email, or None.
+    """The address a supplier's orders go to, or None.
 
-    Contacts attach to a Supplier through the Dynamic Link child table, so this
-    is not a column on Supplier itself. Primary contacts win; among the rest,
-    the oldest is as good a default as any and is stable across requests.
+    `Supplier.email_id` is what an admin sets on the Console's Suppliers
+    screen, so it wins. A linked Contact is the fallback, for a supplier
+    entered in Desk with a person attached instead: contacts attach to a
+    Supplier through the Dynamic Link child table, so that is not a column on
+    Supplier itself. Primary contacts win; among the rest, the oldest is as
+    good a default as any and is stable across requests.
     """
+    recorded = frappe.db.get_value("Supplier", supplier, "email_id")
+    if recorded and recorded.strip():
+        return recorded.strip()
+
     rows = frappe.db.sql(
         """
         SELECT c.email_id

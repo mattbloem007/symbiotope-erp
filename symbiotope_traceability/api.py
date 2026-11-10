@@ -221,6 +221,13 @@ def get_suppliers():
 
     return frappe.get_all(
         "Supplier",
-        fields=["name", "supplier_name", "supplier_group", "country", "disabled"],
+        fields=[
+            "name",
+            "supplier_name",
+            "supplier_group",
+            "country",
+            "disabled",
+            "email_id",
+        ],
         order_by="supplier_name asc",
     )
