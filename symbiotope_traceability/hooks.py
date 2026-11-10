@@ -7,7 +7,11 @@ app_license = "Proprietary"
 
 # Custom fields for the storefront <-> ERP integration (Milestone 5). Runs after
 # every migrate, so the fields exist on any site the app is installed on.
-after_migrate = ["symbiotope_traceability.storefront.setup_custom_fields"]
+after_migrate = [
+    "symbiotope_traceability.storefront.setup_custom_fields",
+    "symbiotope_traceability.purchasing.setup_purchasing_fields",
+    "symbiotope_traceability.purchasing.setup_purchasing_permissions",
+]
 
 # Automation for Milestone 4's harvest -> processing -> extraction -> inventory loop.
 # Ships as real hooks.py doc_events (rather than Server Scripts, which Frappe Cloud
@@ -18,5 +22,10 @@ doc_events = {
     },
     "Extraction Batch": {
         "before_save": "symbiotope_traceability.automation.on_extraction_batch_before_save",
+    },
+    # The bought lane: a received plant-material line becomes a Quarantine lot.
+    # Runs for receipts raised here and for ones typed directly into Desk.
+    "Purchase Receipt": {
+        "before_submit": "symbiotope_traceability.purchasing.stamp_intake_lots",
     },
 }

@@ -79,6 +79,8 @@ def on_processing_stage_log_created(doc, method):
             "batch_id": batch_id,
             "item": item_code,
             "harvest_batch": harvest_batch.name,
+            "plant_source": harvest_batch.plant_source,
+            "intake_type": "Harvested",
             "lot_status": "Quarantine",
         })
         batch.insert(ignore_permissions=True)
