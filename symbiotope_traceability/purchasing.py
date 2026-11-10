@@ -455,7 +455,7 @@ def get_purchase_order(name):
     # What the Console should pre-fill in "Send to supplier": the contact on the
     # order first, then the supplier's own primary contact.
     order["recipient"] = order.get("contact_email") or _supplier_email(order["supplier"]) or ""
-    order["reply_to"] = _reply_to(order) or ""
+    order["reply_to"] = _reply_to(order["company"]) or ""
 
     received = _received_by_order_item(name)
     order["items"] = frappe.get_all(
