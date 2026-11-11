@@ -30,3 +30,11 @@ doc_events = {
         "before_submit": "symbiotope_traceability.purchasing.stamp_intake_lots",
     },
 }
+
+# Frappe sends a new user's welcome mail (and password resets) as the *logged-in*
+# user, so an admin's personal address becomes the From and the mail fails DMARC
+# at the recipient while the queue reports it as sent. This override sends those
+# two mails as the site instead, with the inviter as Reply-To.
+override_doctype_class = {
+    "User": "symbiotope_traceability.user_mail.SymbiotopeUser",
+}
