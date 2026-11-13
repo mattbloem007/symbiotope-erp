@@ -75,10 +75,10 @@ TYPED = frozenset(
     {"text", "long_text", "number", "percent", "date", "time", "datetime", "select", "signature"}
 )
 
-#: Fields a frozen SOP may still carry a change on. Signature transitions are
-#: written with `db_set` (which skips controller hooks), so nothing here
-#: arrives through a save today; the set exists so a signature written as a
-#: save later does not trip the freeze.
+#: Fields a frozen SOP may still carry a change on. These are the control
+#: fields a signed decision writes: superseding a frozen SOP is legitimate --
+#: the version in force moves on, while the frozen record itself stays as it
+#: was. Everything else is refused once a completed run cites the SOP.
 FROZEN_ALLOWED = frozenset(
     {
         "status",
@@ -396,7 +396,11 @@ def on_sop_before_save(doc, method=None):
     """
     previous = doc.get_doc_before_save()
 
-    if previous and previous.get("frozen_on"):
+    if (
+        previous
+        and previous.get("frozen_on")
+        and not frappe.flags.get("sop_control_write")
+    ):
         changed = [
             df.label or df.fieldname
             for df in doc.meta.fields

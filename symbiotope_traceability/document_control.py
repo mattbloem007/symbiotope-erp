@@ -286,11 +286,27 @@ def on_sop_trash(doc, method=None):
         frappe.delete_doc(
             "SOP Form Template", name, ignore_permissions=True, force=True
         )
-    for name in frappe.get_all(
-        "File",
-        filters={"attached_to_doctype": "SOP", "attached_to_name": doc.name},
-        pluck="name",
-    ):
+    files = set(
+        frappe.get_all(
+            "File",
+            filters={"attached_to_doctype": "SOP", "attached_to_name": doc.name},
+            pluck="name",
+        )
+    )
+    if doc.get("document"):
+        # The Console uploads the document before the SOP exists, so that File
+        # has no attached_to set; match it by URL or it stays behind orphaned.
+        # A revision shares its source's file, so a file another SOP still
+        # points at stays: deleting it would take their document with it.
+        if not frappe.db.exists(
+            "SOP", {"document": doc.document, "name": ("!=", doc.name)}
+        ):
+            files.update(
+                frappe.get_all(
+                    "File", filters={"file_url": doc.document}, pluck="name"
+                )
+            )
+    for name in files:
         frappe.delete_doc("File", name, ignore_permissions=True, force=True)
 
 
@@ -346,6 +362,25 @@ def on_extraction_before_save(doc, method=None):
             f"Extraction {doc.name} is complete. Its batch record is closed and "
             f"cannot be changed; a correction is a deviation, not an edit."
         )
+
+    # Work is done to a procedure in force, and to one procedure only. A new
+    # run may only cite an Active version, and a run that already cites one
+    # cannot swap it: the form on the record was snapshotted from the SOP it
+    # started with, so a swap would leave the batch record claiming a document
+    # it was never filled in against.
+    if doc.sop and doc.has_value_changed("sop"):
+        if previous and previous.get("sop"):
+            frappe.throw(
+                f"Extraction {doc.name} was started against SOP {previous.sop} "
+                f"and its form was taken from it. The SOP cannot be changed; "
+                f"start a new run instead."
+            )
+        status = frappe.db.get_value("SOP", doc.sop, "status")
+        if status != "Active":
+            frappe.throw(
+                f"SOP {doc.sop} is {status}. A run can only be started against "
+                f"the version in force; approve it first, or pick another SOP."
+            )
 
     if doc.status == "Complete" and (not previous or previous.status != "Complete"):
         doc.completed_on = now_datetime()
@@ -477,17 +512,27 @@ def _apply_sop_status(name, values):
 
     `db_set` would be shorter, but it skips the Version row, and a status
     change that leaves no trace in the record's own history is exactly what
-    document control is supposed to prevent. `sop_signature` tells the SOP's
-    before_save hook that this particular status change came from a signature.
+    document control is supposed to prevent.
+
+    Two flags tell the SOP's before_save hook what it is looking at:
+    `sop_control_write` marks a write of control fields by this module, so the
+    freeze's field-level refusal does not catch the approval that puts a
+    revision in force; `sop_signature` marks the status change itself as coming
+    from a signature, which is the only way status may move.
     """
     doc = frappe.get_doc("SOP", name)
     for fieldname, value in values.items():
         doc.set(fieldname, value)
-    frappe.flags.sop_signature = True
+    previous_signature = frappe.flags.get("sop_signature")
+    # Both flags are restored rather than cleared, so a nested write cannot
+    # leave a later save believing it is something it is not.
+    frappe.flags.sop_control_write = True
+    frappe.flags.sop_signature = bool(previous_signature) or "status" in values
     try:
         doc.save(ignore_permissions=True)
     finally:
-        frappe.flags.sop_signature = False
+        frappe.flags.sop_control_write = False
+        frappe.flags.sop_signature = previous_signature
 
 
 def _freeze_sop(sop, run):
