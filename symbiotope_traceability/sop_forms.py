@@ -188,6 +188,32 @@ def setup_sop_forms():
 
     _let_submitters_add_sops()
 
+    _draft_missing_forms()
+
+
+def _draft_missing_forms():
+    """Read a form for any SOP that gained a document before this hook existed.
+
+    Uploading a document is meant to produce a draft on its own; on a site that
+    already held SOPs before that behaviour shipped, the draft would otherwise
+    wait for someone to press a button they do not know is there. Only SOPs
+    with no form at all are touched -- a reviewed draft or a published form is
+    never replaced by a deploy.
+    """
+    if not frappe.db.exists("DocType", "SOP"):
+        return
+    for name in frappe.get_all(
+        "SOP",
+        filters=[["document", "is", "set"], ["status", "in", ["Draft", "Active"]]],
+        pluck="name",
+    ):
+        doc = frappe.get_doc("SOP", name)
+        if doc.get("frozen_on"):
+            continue
+        if frappe.db.exists("SOP Form Template", {"sop": name}):
+            continue
+        _draft_quietly(doc)
+
 
 def _ensure_role(role):
     if frappe.db.exists("Role", role):
@@ -438,9 +464,40 @@ def on_sop_created(doc, method=None):
     intact and says so in the log -- a document in an unfamiliar house style is
     the cue to build the form by hand, not a reason to refuse the SOP.
     """
-    if doc.status != "Draft" or not doc.document:
+    if doc.status != "Draft":
+        return
+    _draft_quietly(doc)
+
+
+def on_sop_updated(doc, method=None):
+    """Draft the form when a SOP gains a document after it was created.
+
+    A SOP is often created first and its batch form attached afterwards -- on
+    the SOP's own page, in Desk, or by a client following up on an email. That
+    is the same act as uploading it on the first save, so it gets the same
+    treatment rather than waiting for someone to find a button.
+
+    What is deliberately *not* touched: an existing draft (it may carry an
+    admin's corrections), a published form (it is the record of what runs
+    followed), and a frozen or superseded SOP (its form is evidence). Reading
+    a changed document over a published form stays an explicit admin action.
+    """
+    if doc.status == "Superseded" or doc.get("frozen_on"):
         return
     if frappe.db.exists("SOP Form Template", {"sop": doc.name}):
+        return
+    _draft_quietly(doc)
+
+
+def _draft_quietly(doc):
+    """Read the SOP's document into a draft, and leave the SOP saved if it fails.
+
+    A document in an unfamiliar house style is the cue to build the form by
+    hand; it is not a reason to refuse the SOP or to break the save that
+    carried it. The failure is logged with the document's URL so the admin can
+    see why no form appeared.
+    """
+    if not doc.document:
         return
     try:
         _draft_from_document(doc.name, replace=False)

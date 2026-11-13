@@ -36,6 +36,7 @@ doc_events = {
     "SOP": {
         "before_save": "symbiotope_traceability.sop_forms.on_sop_before_save",
         "after_insert": "symbiotope_traceability.sop_forms.on_sop_created",
+        "on_update": "symbiotope_traceability.sop_forms.on_sop_updated",
         "on_trash": "symbiotope_traceability.document_control.on_sop_trash",
     },
     "SOP Form Template": {
