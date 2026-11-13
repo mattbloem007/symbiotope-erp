@@ -75,6 +75,45 @@ TYPED = frozenset(
     {"text", "long_text", "number", "percent", "date", "time", "datetime", "select", "signature"}
 )
 
+#: Fields a frozen SOP may still carry a change on. Signature transitions are
+#: written with `db_set` (which skips controller hooks), so nothing here
+#: arrives through a save today; the set exists so a signature written as a
+#: save later does not trip the freeze.
+FROZEN_ALLOWED = frozenset(
+    {
+        "status",
+        "superseded_by",
+        "approved_by",
+        "approved_on",
+        "previous_version",
+        "modified",
+        "modified_by",
+    }
+)
+
+
+def _sop_frozen(sop):
+    """When a SOP was frozen by a completed run, else None.
+
+    Read from the database rather than from a loaded document: a SOP object
+    fetched before another request completed a run would otherwise still look
+    editable, and document control is only worth anything if it is decided
+    against the stored record.
+    """
+    if not sop:
+        return None
+    return frappe.db.get_value("SOP", sop, "frozen_on")
+
+
+def _refuse_frozen(sop, what):
+    frozen_on = _sop_frozen(sop)
+    if frozen_on:
+        frappe.throw(
+            f"SOP {sop} was frozen on {frozen_on} because a completed extraction "
+            f"run cites it, so its {what} cannot be changed. Issue a new version: "
+            f"a revision is a new SOP, not an edit to the record."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Setup (after_migrate: the doctypes and fields must exist on a fresh site)
@@ -158,7 +197,13 @@ def _ensure_role(role):
     ).insert(ignore_permissions=True)
 
 
-def _ensure_doctype(name, fields, istable=False, permissions=None):
+def _ensure_doctype(
+    name,
+    fields,
+    istable=False,
+    permissions=None,
+    autoname="format:SOPF-{YYYY}-{#####}",
+):
     """Create the doctype if the site does not have it yet.
 
     These are site-local doctypes, the same way SOP and Extraction Batch were
@@ -185,7 +230,7 @@ def _ensure_doctype(name, fields, istable=False, permissions=None):
             # A custom doctype with a series needs this named explicitly; the
             # Console prints a form code off it, so it is not just an internal id.
             "naming_rule": None if istable else "Expression (old style)",
-            "autoname": None if istable else "format:SOPF-{YYYY}-{#####}",
+            "autoname": None if istable else autoname,
             "fields": fields,
             "permissions": [] if istable else [
                 {"role": role, "permlevel": 0, "read": 1,
@@ -331,28 +376,53 @@ def parse_sop_form(sop):
     edit to the record of what was already run.
     """
     _require_admin()
+    _refuse_frozen(sop, "extraction form")
     name = _draft_from_document(sop, replace=True)
     return _sop_payload(frappe.get_doc("SOP Form Template", name))
 
 
 def on_sop_before_save(doc, method=None):
-    """Status is an admin's decision, whichever way the SOP was saved.
+    """A SOP obeys document control, not just its author.
 
-    A submitting client may add and correct their own procedure, but not
-    activate it: the Console forcing Draft on create is a courtesy to the
-    person using it, not the thing that stops a crafted request from doing
-    otherwise. A document that arrived in an email cannot by itself change what
-    the lab is allowed to do.
+    Three rules, and they hold however the record is saved -- Console, Desk,
+    REST or a script:
+
+    * a SOP is created as a Draft, always: activation is a signed approval, not
+      a value typed into a form;
+    * its status changes only through that signature, so a document cannot be
+      put in force by editing a field;
+    * a frozen SOP -- one a completed run cites -- cannot change at all. The
+      document a run followed is evidence; a revision is a new record.
     """
-    if ADMIN_ROLES.intersection(frappe.get_roles()):
-        return
+    previous = doc.get_doc_before_save()
+
+    if previous and previous.get("frozen_on"):
+        changed = [
+            df.label or df.fieldname
+            for df in doc.meta.fields
+            if df.fieldtype not in ("Section Break", "Column Break", "Tab Break")
+            and df.fieldname not in FROZEN_ALLOWED
+            and doc.has_value_changed(df.fieldname)
+        ]
+        if changed:
+            frappe.throw(
+                f"SOP {doc.name} was frozen on {previous.frozen_on} because a "
+                f"completed extraction run cites it. Its "
+                f"{', '.join(changed[:5])} cannot be changed. Issue a new version "
+                f"from it instead."
+            )
+
     if doc.is_new():
+        # Even an admin's new SOP starts as a Draft: approval is the signature
+        # that puts a version in force.
         doc.status = "Draft"
         return
-    if doc.has_value_changed("status"):
+
+    if doc.has_value_changed("status") and not frappe.flags.get("sop_signature"):
         frappe.throw(
-            "Only an admin can change a SOP's status. Save it as a Draft and "
-            "ask an admin to activate it."
+            "A SOP's status changes through a signed approval or supersession, "
+            "not by editing it. Use Approve or Mark superseded on the SOP's "
+            "page, both of which ask for your password and a reason."
         )
 
 
@@ -381,6 +451,12 @@ def on_sop_created(doc, method=None):
 
 def _draft_from_document(sop, replace):
     sop_doc = frappe.get_doc("SOP", sop)
+    _refuse_frozen(sop_doc.name, "extraction form")
+    if sop_doc.status == "Superseded":
+        frappe.throw(
+            f"SOP {sop_doc.name} is superseded, so its form is history. "
+            f"Read the form on the version now in force instead."
+        )
     if not sop_doc.document:
         frappe.throw(f"SOP {sop_doc.name} has no document attached, so there is nothing to read.")
 
@@ -517,6 +593,7 @@ def save_sop_form(template, fields):
             f"Form {doc.name} is {doc.status}. Only a draft can be edited; "
             f"a published form is the record of what runs were filled in against."
         )
+    _refuse_frozen(doc.sop, "extraction form")
 
     rows = _clean_rows(_loads(fields))
     if not rows:
@@ -542,6 +619,13 @@ def publish_sop_form(template):
     doc = frappe.get_doc("SOP Form Template", template)
     if doc.status == "Published":
         return _sop_payload(doc)
+
+    _refuse_frozen(doc.sop, "extraction form")
+    if frappe.db.get_value("SOP", doc.sop, "status") == "Superseded":
+        frappe.throw(
+            f"SOP {doc.sop} is superseded, so no further form can be published "
+            f"for it. Issue a new version instead."
+        )
 
     problems = _publish_problems(doc)
     if problems:
@@ -681,6 +765,8 @@ def get_sop_form(sop):
             "sections": [],
             "fields": [],
             "published": None,
+            "sop_status": frappe.db.get_value("SOP", sop, "status"),
+            "frozen_on": _sop_frozen(sop),
         }
 
     return _sop_payload(template)
@@ -740,8 +826,9 @@ def save_extraction_form(batch, values):
     doc.check_permission("write")
     if doc.status == "Complete":
         frappe.throw(
-            f"Extraction {doc.name} is complete. Its batch record is closed; "
-            f"reopen it before changing what was recorded."
+            f"Extraction {doc.name} is complete. Its batch record is closed and "
+            f"cannot be changed; a correction is a deviation recorded against "
+            f"the run, not an edit to it."
         )
 
     answers = _loads(values) or {}
@@ -960,6 +1047,8 @@ def _sop_payload(template):
     form" and "its form is being revised".
     """
     payload = _template_payload(template)
+    payload["sop_status"] = frappe.db.get_value("SOP", template.sop, "status")
+    payload["frozen_on"] = _sop_frozen(template.sop)
     live = (
         _template_for(template.sop, ("Published",))
         if template.status == "Draft"
