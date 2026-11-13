@@ -272,7 +272,8 @@ def on_sop_trash(doc, method=None):
     if frappe.db.exists("SOP Form Template", {"sop": doc.name, "status": "Published"}):
         frappe.throw(
             f"SOP {doc.name} has a published extraction form and cannot be "
-            f"deleted. Mark it Superseded instead."
+            f"deleted. A published form makes it a controlled document: approve "
+            f"and supersede it rather than deleting it."
         )
 
     # Only an unused draft gets this far; take its unapproved form and its
