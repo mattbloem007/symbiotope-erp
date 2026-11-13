@@ -13,6 +13,7 @@ after_migrate = [
     "symbiotope_traceability.purchasing.setup_purchasing_permissions",
     "symbiotope_traceability.purchasing.setup_purchase_order_print_format",
     "symbiotope_traceability.user_mail.setup_user_mail_fields",
+    "symbiotope_traceability.sop_forms.setup_sop_forms",
 ]
 
 # Automation for Milestone 4's harvest -> processing -> extraction -> inventory loop.
@@ -24,6 +25,12 @@ doc_events = {
     },
     "Extraction Batch": {
         "before_save": "symbiotope_traceability.automation.on_extraction_batch_before_save",
+    },
+    # A client's upload is drafted into an extraction form immediately, so it is
+    # waiting for an admin's review rather than for someone to remember it.
+    "SOP": {
+        "before_save": "symbiotope_traceability.sop_forms.on_sop_before_save",
+        "after_insert": "symbiotope_traceability.sop_forms.on_sop_created",
     },
     # The bought lane: a received plant-material line becomes a Quarantine lot.
     # Runs for receipts raised here and for ones typed directly into Desk.

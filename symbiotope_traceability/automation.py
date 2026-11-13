@@ -11,6 +11,8 @@ from contextlib import contextmanager
 
 import frappe
 
+from symbiotope_traceability import sop_forms
+
 
 # ERPNext v16 builds a Serial and Batch Bundle for any row that carries a
 # batch_no, which then collides with the batch_no still set on the row
@@ -139,9 +141,16 @@ def on_extraction_batch_before_save(doc, method):
 
     Also freezes the SOP version onto the run the moment an SOP is attached."""
     _snapshot_sop_version(doc)
+    # The form follows the SOP: attaching one copies its published form onto
+    # the run, so what was asked for is fixed for the length of the run.
+    sop_forms.sync_form_values(doc)
 
     if doc.status != "Complete" or not doc.has_value_changed("status"):
         return
+
+    # Completion is gated on the form before any stock moves: a run that is
+    # missing what its SOP says to record must not consume material.
+    sop_forms.validate_form_completion(doc)
 
     for row in doc.input_batches:
         lot_status = frappe.db.get_value("Batch", row.batch, "lot_status")
