@@ -296,19 +296,27 @@ def on_sop_trash(doc, method=None):
     )
     if doc.get("document"):
         # The Console uploads the document before the SOP exists, so that File
-        # has no attached_to set; match it by URL or it stays behind orphaned.
-        # A revision shares its source's file, so a file another SOP still
-        # points at stays: deleting it would take their document with it.
-        if not frappe.db.exists(
-            "SOP", {"document": doc.document, "name": ("!=", doc.name)}
-        ):
-            files.update(
-                frappe.get_all(
-                    "File", filters={"file_url": doc.document}, pluck="name"
-                )
-            )
+        # can have no attached_to set; match it by URL or it stays behind.
+        files.update(
+            frappe.get_all("File", filters={"file_url": doc.document}, pluck="name")
+        )
     for name in files:
-        frappe.delete_doc("File", name, ignore_permissions=True, force=True)
+        file_doc = frappe.get_doc("File", name)
+        holders = _sop_file_holders(file_doc)
+        if all(holder in frappe.flags.sops_being_deleted for holder in holders):
+            frappe.delete_doc("File", name, ignore_permissions=True, force=True)
+        elif file_doc.attached_to_name == doc.name:
+            # A revision can point at the same document as the SOP it revises.
+            # Its bytes belong to both, so leave the File in place and only
+            # clear the link to the SOP that is going away. Otherwise the File
+            # guard below rightly refuses the deletion and a deletable draft
+            # cannot be removed at all.
+            frappe.db.set_value(
+                "File",
+                name,
+                {"attached_to_doctype": None, "attached_to_name": None},
+                update_modified=False,
+            )
 
 
 def on_form_before_save(doc, method=None):
@@ -459,27 +467,36 @@ def on_plant_source_trash(doc, method=None):
         )
 
 
+def _sop_file_holders(file_doc):
+    """Every SOP that a File is the document of, by URL or by attachment.
+
+    Both routes matter: a Console upload may have no `attached_to` set, and a
+    revision can share its source's URL while having its own File row.
+    """
+    holders = set()
+    if file_doc.file_url:
+        holders.update(
+            frappe.get_all("SOP", filters={"document": file_doc.file_url}, pluck="name")
+        )
+    if (
+        file_doc.attached_to_doctype == "SOP"
+        and file_doc.attached_to_name
+        and frappe.db.exists("SOP", file_doc.attached_to_name)
+    ):
+        holders.add(file_doc.attached_to_name)
+    return holders
+
+
 def on_file_trash(doc, method=None):
     """The SOP's document is part of the controlled record.
 
     A file is matched to its SOP by URL as well as by attachment, because the
     Console uploads the document before the SOP exists and so the File has no
     `attached_to` set. Either way, the bytes behind a controlled procedure are
-    not something to delete from the file list. Allowed only while the SOP
+    not something to delete from the file list. Allowed only while every SOP
     holding it is itself a deletable draft being removed.
     """
-    holders = []
-    if doc.file_url:
-        holders = frappe.get_all(
-            "SOP", filters={"document": doc.file_url}, pluck="name"
-        )
-    if (
-        doc.attached_to_doctype == "SOP"
-        and doc.attached_to_name
-        and frappe.db.exists("SOP", doc.attached_to_name)
-        and doc.attached_to_name not in holders
-    ):
-        holders.append(doc.attached_to_name)
+    holders = _sop_file_holders(doc)
     if not holders:
         return
 
@@ -489,8 +506,8 @@ def on_file_trash(doc, method=None):
 
     frappe.throw(
         f"{doc.file_name or 'This file'} is the document of SOP "
-        f"{', '.join(holders)} and cannot be deleted. It is the controlled "
-        f"record of that procedure."
+        f"{', '.join(sorted(holders))} and cannot be deleted. It is the "
+        f"controlled record of that procedure."
     )
 
 
