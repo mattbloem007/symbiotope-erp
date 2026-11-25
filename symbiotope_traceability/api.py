@@ -74,9 +74,20 @@ def setup_console_roles():
         if not frappe.db.exists("DocType", doctype):
             continue
         for role in sorted(CONSOLE_ROLES):
-            if frappe.db.exists(
-                "Custom DocPerm", {"parent": doctype, "role": role, "permlevel": 0}
-            ):
+            existing = frappe.db.get_value(
+                "Custom DocPerm",
+                {"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0},
+                ["name", "read"],
+                as_dict=True,
+            )
+            if existing:
+                # ERPNext seeds some rows with every permission turned off (a
+                # manufacturing role on Batch, for instance). A row existing
+                # is not the same as read being granted, so turn it on here.
+                if not existing.read:
+                    perm = frappe.get_doc("Custom DocPerm", existing.name)
+                    perm.read = 1
+                    perm.save(ignore_permissions=True)
                 continue
             frappe.permissions.add_permission(doctype, role, 0, "read")
 
