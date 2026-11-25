@@ -15,6 +15,7 @@ after_migrate = [
     "symbiotope_traceability.user_mail.setup_user_mail_fields",
     "symbiotope_traceability.sop_forms.setup_sop_forms",
     "symbiotope_traceability.document_control.setup_document_control",
+    "symbiotope_traceability.api.setup_console_roles",
 ]
 
 # Automation for Milestone 4's harvest -> processing -> extraction -> inventory loop.

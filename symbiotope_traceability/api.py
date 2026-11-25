@@ -37,7 +37,48 @@ CONSOLE_ROLES = frozenset({
     "Sales Manager",
     "Stock Manager",
     "Delivery Manager",
+    # ERPNext's own shop-floor and stock roles. People hired as manufacturing
+    # or inventory staff are given these in the ERP, not our custom roles, so
+    # the Console has to serve them too or they land on an empty dashboard.
+    "Stock User",
+    "Item Manager",
+    "Manufacturing User",
+    "Manufacturing Manager",
 })
+
+#: Records the Console lists. Every Console role gets read access to these;
+#: writes still follow each doctype's own rules and signed decisions.
+CONSOLE_READ_DOCTYPES = (
+    "SOP",
+    "SOP Form Template",
+    "SOP Approval",
+    "Lot QA Decision",
+    "Harvest Batch",
+    "Extraction Batch",
+    "Batch",
+    "Plant Source",
+    "Processing Stage Log",
+)
+
+
+def setup_console_roles():
+    """Give every Console role read access to the records the Console shows.
+
+    A role being in CONSOLE_ROLES only opens the whitelisted system readers;
+    lists of custom doctypes still go through Frappe's own DocPerm checks. A
+    person with Manufacturing Manager, for instance, could see the sidebar but
+    every list would refuse them without a row here. `add_permission` copies
+    existing rules into Custom DocPerm first, so no role loses what it has.
+    """
+    for doctype in CONSOLE_READ_DOCTYPES:
+        if not frappe.db.exists("DocType", doctype):
+            continue
+        for role in sorted(CONSOLE_ROLES):
+            if frappe.db.exists(
+                "Custom DocPerm", {"parent": doctype, "role": role, "permlevel": 0}
+            ):
+                continue
+            frappe.permissions.add_permission(doctype, role, 0, "read")
 
 
 def _require_console_role():
